@@ -16,7 +16,7 @@ import sys
 
 # ============ CẤU HÌNH TRỰC TIẾP ============
 # 👇 NHẬP TOKEN BOT CỦA BẠN VÀO ĐÂY
-TOKEN = "NHAP_TOKEN_BOT_CUA_BAN_VAO_DAY"
+TOKEN = "MTUwMzM3NTY3Nzk3MjU0NTYzNw.GigxuG.p5mCHrVOuiq6xlRsxvTEJV69qsTa_rFg4_SzRQ"
 
 # 👇 NHẬP ID CHANNEL LOG (CHỖ BẮT VI PHẠM) VÀO ĐÂY
 LOG_CHANNEL_ID = 123456789  # Thay số này bằng ID channel thật
