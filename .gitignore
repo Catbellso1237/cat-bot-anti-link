@@ -1,14 +1,321 @@
-*.tar
-*.tar.*
-*.jar
-*.exe
-*.msi
-*.deb
-*.zip
-*.tgz
-*.log
-*.log.*
-*.sig
+#!/usr/bin/env python3
+"""
+CAT'S ANTI-LINK BOT - Discord Protection Bot
+Phát hiện quảng cáo, server 18+, tài khoản bị hack - Tự động mute/ban
+Hỗ trợ nhập token và ID chat trực tiếp
+"""
 
-pkg/
-src/
+import discord
+from discord.ext import commands
+from discord import ui
+import re
+from datetime import datetime, timedelta
+import json
+import os
+import sys
+
+# ============ CẤU HÌNH TRỰC TIẾP ============
+# 👇 NHẬP TOKEN BOT CỦA BẠN VÀO ĐÂY
+TOKEN = "NHAP_TOKEN_BOT_CUA_BAN_VAO_DAY"
+
+# 👇 NHẬP ID CHANNEL LOG (CHỖ BẮT VI PHẠM) VÀO ĐÂY
+LOG_CHANNEL_ID = 123456789  # Thay số này bằng ID channel thật
+
+# Ví dụ:
+# TOKEN = "MTIzNDU2Nzg5MDEyMzQ1Njc4OQ.xxxxxx.xxxxxx"
+# LOG_CHANNEL_ID = 1357924680
+
+# ============ CẤU HÌNH KHÁC ============
+CONFIG_FILE = "config.json"
+MUTE_DAYS = 7
+BAN_AFTER = 3
+
+# Pattern phát hiện
+SCAM_PATTERNS = [
+    (r'(casino|baccarat|tài xỉu|nổ hũ|bắn cá|cờ bạc|nhà cái|fun88|w88|thabet)', '🎰 Cờ bạc - Casino'),
+    (r'(discord\.gg/\S+|discord\.com/invite/\S+).{0,30}(18\+|nsfw|sex|girl|gái|trai)', '🔞 Link server 18+'),
+    (r'(18\+|nsfw|sex|phim sex|ảnh nóng|nude|bán sex|girl xinh|trai đẹp)', '🔞 Nội dung người lớn - 18+'),
+    (r'(@everyone|@here).{0,50}(https?://|free nitro|nitro giveaway)', '🚨 Tag everyone - NGHI NGỜ HACK'),
+    (r'(free nitro|nitro giveaway|tặng nitro|đăng nhập.*https?://|verify.*https?://)', '🎣 Scam - Hack tài khoản'),
+    (r'(bit\.ly|tinyurl|rb\.gy|cutt\.ly|shorturl|xyz|top|club|online|site|click)', '⚠️ Link rút gọn - Domain lạ'),
+]
+
+# ============ KIỂM TRA CẤU HÌNH ============
+def check_config():
+    """Kiểm tra token và ID channel trước khi chạy"""
+    errors = []
+    
+    if TOKEN == "NHAP_TOKEN_BOT_CUA_BAN_VAO_DAY":
+        errors.append("❌ CHƯA NHẬP TOKEN BOT!")
+    
+    if LOG_CHANNEL_ID == 123456789:
+        errors.append("❌ CHƯA NHẬP ID CHANNEL LOG!")
+    
+    if errors:
+        print("\n" + "="*50)
+        print("⚠️ CẦU HÌNH THIẾU THÔNG TIN!")
+        print("="*50)
+        for e in errors:
+            print(e)
+        print("\n📌 CÁCH LẤY TOKEN:")
+        print("   1. Truy cập: https://discord.com/developers/applications")
+        print("   2. Tạo ứng dụng mới → Bot → Copy Token")
+        print("\n📌 CÁCH LẤY ID CHANNEL:")
+        print("   1. Bật Developer Mode trong Discord (Cài đặt → Nâng cao)")
+        print("   2. Chuột phải vào channel muốn làm log → Copy ID")
+        print("\n📌 SAU ĐÓ SỬA TRỰC TIẾP TRONG CODE:")
+        print("   TOKEN = 'token_cua_ban'")
+        print("   LOG_CHANNEL_ID = id_channel_cua_ban")
+        print("="*50)
+        return False
+    return True
+
+# ============ KHỞI TẠO BOT ============
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+violations = {}
+
+def save_config():
+    with open(CONFIG_FILE, "w") as f:
+        json.dump({"violations": violations}, f, indent=2)
+
+def load_config():
+    global violations
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as f:
+            data = json.load(f)
+            violations = data.get("violations", {})
+
+def get_threat(content):
+    for p, d in SCAM_PATTERNS:
+        if re.search(p, content.lower()):
+            return 'critical' if 'hack' in d or 'tag' in d or 'scam' in d else 'high'
+    return None
+
+async def punish(member, content, threat, msg_link=None):
+    uid = str(member.id)
+    if uid not in violations:
+        violations[uid] = []
+    violations[uid].append({
+        'time': str(datetime.now()),
+        'threat': threat,
+        'content': content[:200],
+        'link': msg_link
+    })
+    save_config()
+    
+    count = len(violations[uid])
+    
+    # Gửi log đến channel đã cấu hình
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if log_channel:
+        embed = discord.Embed(
+            title=f"🚨 BẮT VI PHẠM - ID: {uid}",
+            color=discord.Color.red(),
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="👤 User", value=f"{member.mention}\n{member.name}\nID: `{uid}`")
+        embed.add_field(name="⚠️ Mức độ", value=threat.upper())
+        embed.add_field(name="📝 Nội dung", value=content[:300])
+        embed.add_field(name="📊 Số lần", value=str(count))
+        if msg_link:
+            embed.add_field(name="🔗 Link", value=f"[Bấm xem]({msg_link})")
+        await log_channel.send(embed=embed)
+    
+    # Xử lý hình phạt
+    if threat == 'critical' or count >= BAN_AFTER:
+        await member.ban(reason=f"Vi phạm {count} lần - {threat}")
+        action = f"🔨 BAN VĨNH VIỄN"
+    else:
+        role = discord.utils.get(member.guild.roles, name="Muted")
+        if not role:
+            role = await member.guild.create_role(name="Muted")
+            for ch in member.guild.channels:
+                try:
+                    await ch.set_permissions(role, send_messages=False, speak=False)
+                except:
+                    pass
+        await member.add_roles(role, reason=f"Vi phạm: {content[:100]}")
+        action = f"🔇 MUTE {MUTE_DAYS} ngày"
+    
+    if log_channel:
+        await log_channel.send(f"{action} {member.mention} - ID: `{uid}`")
+    
+    try:
+        await member.send(f"🔨 **{action}** tại {member.guild.name}\n📋 Lý do: {content[:150]}\n🆔 ID của bạn: `{uid}`")
+    except:
+        pass
+
+# ============ PANEL ĐIỀU KHIỂN ============
+class ControlPanel(ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+    
+    @ui.button(label="📊 THỐNG KÊ", style=discord.ButtonStyle.primary)
+    async def stats(self, i, b):
+        total = sum(len(v) for v in violations.values())
+        embed = discord.Embed(title="📊 THỐNG KÊ BẮT VI PHẠM", color=discord.Color.blue())
+        embed.add_field(name="Tổng vi phạm", value=str(total))
+        embed.add_field(name="User vi phạm", value=str(len(violations)))
+        embed.add_field(name="📝 Channel Log ID", value=f"`{LOG_CHANNEL_ID}`")
+        embed.add_field(name="📊 Pattern", value=str(len(SCAM_PATTERNS)))
+        await i.response.send_message(embed=embed, ephemeral=True)
+    
+    @ui.button(label="🆔 COPY ID", style=discord.ButtonStyle.secondary)
+    async def copy_id(self, i, b):
+        await i.response.send_message(
+            f"🆔 **ID KÊNH LOG:** `{LOG_CHANNEL_ID}`\n"
+            f"📋 **ID SERVER:** `{i.guild.id}`\n"
+            f"👤 **ID BẠN:** `{i.user.id}`\n"
+            f"🤖 **ID BOT:** `{bot.user.id}`", 
+            ephemeral=True
+        )
+    
+    @ui.button(label="🚨 CHECK USER", style=discord.ButtonStyle.danger)
+    async def check_user(self, i, b):
+        await i.response.send_modal(CheckModal())
+    
+    @ui.button(label="📋 DANH SÁCH ID", style=discord.ButtonStyle.secondary)
+    async def list_ids(self, i, b):
+        if not violations:
+            await i.response.send_message("📭 Chưa có vi phạm nào", ephemeral=True)
+            return
+        ids = "\n".join([f"• ID: `{uid}` - {len(v)} lần" for uid, v in list(violations.items())[:15]])
+        await i.response.send_message(f"📋 **DANH SÁCH ID VI PHẠM**\n{ids}", ephemeral=True)
+    
+    @ui.button(label="⚙️ CẤU HÌNH", style=discord.ButtonStyle.primary)
+    async def show_config(self, i, b):
+        embed = discord.Embed(title="⚙️ CẤU HÌNH HIỆN TẠI", color=discord.Color.green())
+        embed.add_field(name="🤖 Token Bot", value=f"`{TOKEN[:20]}...`" if TOKEN != "NHAP_TOKEN_BOT_CUA_BAN_VAO_DAY" else "❌ Chưa cấu hình")
+        embed.add_field(name="📝 Log Channel ID", value=f"`{LOG_CHANNEL_ID}`" if LOG_CHANNEL_ID != 123456789 else "❌ Chưa cấu hình")
+        embed.add_field(name="🔇 Ngày mute", value=f"{MUTE_DAYS} ngày")
+        embed.add_field(name="🔨 Ngưỡng ban", value=f"{BAN_AFTER} lần")
+        await i.response.send_message(embed=embed, ephemeral=True)
+
+class CheckModal(ui.Modal, title="KIỂM TRA USER THEO ID"):
+    uid = ui.TextInput(label="User ID", placeholder="Nhập ID user cần kiểm tra")
+    async def on_submit(self, i):
+        v = violations.get(self.uid.value, [])
+        if not v:
+            await i.response.send_message(f"✅ ID `{self.uid.value}` không có vi phạm", ephemeral=True)
+            return
+        msg = f"📋 **ID: `{self.uid.value}`**\n📊 {len(v)} lần vi phạm\n\n"
+        for idx, item in enumerate(v[-5:], 1):
+            msg += f"**Lần {idx}** - {item['time'][:16]}\nMức: {item['threat']}\nND: {item['content'][:80]}\n\n"
+        await i.response.send_message(msg[:1900], ephemeral=True)
+
+# ============ LỆNH ============
+@bot.command()
+async def panel(ctx):
+    """!panel - Mở bảng điều khiển"""
+    if not ctx.author.guild_permissions.administrator:
+        return await ctx.send("❌ Bạn cần quyền Administrator!")
+    
+    embed = discord.Embed(
+        title="🐱 CAT'S ANTI-LINK - BẢNG ĐIỀU KHIỂN",
+        description=f"📝 Đang ghi log tại channel ID: `{LOG_CHANNEL_ID}`",
+        color=discord.Color.gold()
+    )
+    await ctx.send(embed=embed, view=ControlPanel())
+
+@bot.command()
+async def stats(ctx):
+    """!stats - Xem thống kê"""
+    total = sum(len(v) for v in violations.values())
+    embed = discord.Embed(title="📊 THỐNG KÊ", color=discord.Color.blue())
+    embed.add_field(name="Tổng vi phạm", value=str(total))
+    embed.add_field(name="User vi phạm", value=str(len(violations)))
+    embed.add_field(name="📝 Log Channel ID", value=f"`{LOG_CHANNEL_ID}`")
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def check(ctx, user: discord.Member = None):
+    """!check @user - Kiểm tra user"""
+    if not user:
+        return await ctx.send(f"🆔 ID của bạn: `{ctx.author.id}`")
+    
+    uid = str(user.id)
+    v = violations.get(uid, [])
+    if not v:
+        await ctx.send(f"✅ {user.mention} không có vi phạm\n🆔 ID: `{uid}`")
+    else:
+        await ctx.send(f"⚠️ {user.mention} có {len(v)} lần vi phạm\n🆔 ID: `{uid}`")
+
+@bot.command()
+async def channel_id(ctx):
+    """!channel_id - Xem ID kênh hiện tại"""
+    await ctx.send(f"📝 **ID kênh này:** `{ctx.channel.id}`\n🆔 **ID server:** `{ctx.guild.id}`\n🤖 **ID bot:** `{bot.user.id}`")
+
+@bot.command()
+async def bot_id(ctx):
+    """!bot_id - Xem ID bot"""
+    await ctx.send(f"🤖 **ID Bot:** `{bot.user.id}`")
+
+@bot.command()
+async def reset(ctx):
+    """!reset - Reset dữ liệu (Admin)"""
+    if ctx.author.guild_permissions.administrator:
+        global violations
+        violations = {}
+        save_config()
+        await ctx.send("🔄 Đã reset toàn bộ dữ liệu vi phạm!")
+
+# ============ SỰ KIỆN ============
+@bot.event
+async def on_message(msg):
+    if msg.author.bot:
+        return await bot.process_commands(msg)
+    
+    threat = get_threat(msg.content)
+    if threat:
+        try:
+            await msg.delete()
+        except:
+            pass
+        await punish(msg.author, msg.content, threat, msg.jump_url)
+    
+    await bot.process_commands(msg)
+
+@bot.event
+async def on_ready():
+    load_config()
+    await bot.change_presence(activity=discord.Game(name="Cat's Anti-Link | !panel | !stats"))
+    
+    print(f"""
+╔══════════════════════════════════════════════════════════════════╗
+║                    CAT'S ANTI-LINK BOT - ĐÃ SẴN SÀNG            ║
+╠══════════════════════════════════════════════════════════════════╣
+║  🤖 Tên Bot: {bot.user.name}
+║  🆔 ID Bot: {bot.user.id}
+║  📝 Log Channel ID: {LOG_CHANNEL_ID}
+║  📊 Số pattern: {len(SCAM_PATTERNS)}
+║  🔨 Tổng vi phạm: {sum(len(v) for v in violations.values())}
+║  👥 User vi phạm: {len(violations)}
+╠══════════════════════════════════════════════════════════════════╣
+║  📌 CÁC LỆNH CẦN DÙNG:                                         ║
+║  • !panel    - Mở bảng điều khiển                               ║
+║  • !stats    - Xem thống kê                                     ║
+║  • !check @user - Kiểm tra user                                ║
+║  • !channel_id - Xem ID kênh                                   ║
+║  • !bot_id   - Xem ID bot                                      ║
+║  • !reset    - Reset dữ liệu (Admin)                           ║
+╚══════════════════════════════════════════════════════════════════╝
+    """)
+    
+    # Kiểm tra và thông báo
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if log_channel:
+        await log_channel.send(f"🐱 **{bot.user.name} đã khởi động!**\n✅ Đang giám sát kênh này.\n🆔 Bot ID: `{bot.user.id}`\n📝 Channel ID: `{LOG_CHANNEL_ID}`")
+
+# ============ CHẠY BOT ============
+if __name__ == "__main__":
+    if not check_config():
+        sys.exit(1)
+    
+    try:
+        bot.run(TOKEN)
+    except discord.LoginFailure:
+        print("\n❌ TOKEN KHÔNG HỢP LỆ! Vui lòng kiểm tra lại token.")
+    except Exception as e:
+        print(f"\n❌ LỖI: {e}")
